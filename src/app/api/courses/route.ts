@@ -1,28 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
+import { supabase } from '@/lib/supabase'
 
-// GET /api/courses?status=IN_PROGRESS&category=ARABIC
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
-  const status = searchParams.get('status') ?? undefined
-  const category = searchParams.get('category') ?? undefined
+  const status   = searchParams.get('status')
+  const category = searchParams.get('category')
 
-  const courses = await prisma.course.findMany({
-    where: {
-      ...(status && { status: status as never }),
-      ...(category && { category: category as never }),
-    },
-    include: {
-      teachers: { include: { user: { select: { id: true, name: true, avatar: true } } } },
-      _count: { select: { enrollments: true, lessons: true } },
-    },
-    orderBy: { startDate: 'asc' },
-  })
+  let query = supabase
+    .from('Course')
+    .select('*, teachers:CourseTeacher(role, user:User(id, name, avatar))')
+    .order('startDate', { ascending: true })
 
-  return NextResponse.json(courses)
+  if (status)   query = query.eq('status', status)
+  if (category) query = query.eq('category', category)
+
+  const { data, error } = await query
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json(data)
 }
 
-// POST /api/courses — create
 export async function POST(req: NextRequest) {
   const body = await req.json()
 
@@ -30,69 +26,52 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'title, category, price and startDate are required' }, { status: 400 })
   }
 
-  const course = await prisma.course.create({
-    data: {
-      title: body.title,
+  const { data, error } = await supabase
+    .from('Course')
+    .insert({
+      title:       body.title,
       description: body.description ?? null,
-      category: body.category,
-      status: body.status ?? 'UPCOMING',
-      price: body.price,
-      startDate: new Date(body.startDate),
-      endDate: body.endDate ? new Date(body.endDate) : null,
-    },
-  })
-  return NextResponse.json(course, { status: 201 })
+      category:    body.category,
+      status:      body.status ?? 'UPCOMING',
+      price:       body.price,
+      startDate:   body.startDate,
+      endDate:     body.endDate ?? null,
+    })
+    .select()
+    .single()
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json(data, { status: 201 })
 }
 
-// PUT /api/courses — update existing course
-export async function PUT(req: NextRequest) {
-  const body = await req.json()
-  const { id, ...data } = body
-
-  if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
-
-  const course = await prisma.course.update({
-    where: { id },
-    data: {
-      ...(data.title && { title: data.title }),
-      description: data.description ?? null,
-      ...(data.category && { category: data.category }),
-      ...(data.status && { status: data.status }),
-      ...(data.price !== undefined && { price: data.price }),
-      ...(data.startDate && { startDate: new Date(data.startDate) }),
-      endDate: data.endDate ? new Date(data.endDate) : null,
-    },
-  })
-  return NextResponse.json(course)
-}
-
-// DELETE /api/courses
 export async function DELETE(req: NextRequest) {
   const { id } = await req.json()
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
-  await prisma.course.delete({ where: { id } })
+
+  const { error } = await supabase.from('Course').delete().eq('id', id)
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ deleted: true })
 }
 
-// PATCH /api/courses — assign/remove teacher (multi-instructor)
 export async function PATCH(req: NextRequest) {
-  const { courseId, teacherId, role, action } = (await req.json()) as {
-    courseId: string
-    teacherId: string
-    role?: string
-    action: 'assign' | 'remove'
-  }
+  const { courseId, teacherId, role, action } = await req.json()
 
   if (action === 'remove') {
-    await prisma.courseTeacher.deleteMany({ where: { courseId, userId: teacherId } })
+    const { error } = await supabase
+      .from('CourseTeacher')
+      .delete()
+      .eq('courseId', courseId)
+      .eq('userId', teacherId)
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json({ removed: true })
   }
 
-  const ct = await prisma.courseTeacher.upsert({
-    where: { courseId_userId: { courseId, userId: teacherId } },
-    create: { courseId, userId: teacherId, role: role ?? 'main' },
-    update: { role: role ?? 'main' },
-  })
+  const { data, error } = await supabase
+    .from('CourseTeacher')
+    .upsert({ courseId, userId: teacherId, role: role ?? 'main' }, { onConflict: 'courseId,userId' })
+    .select()
+    .single()
 
-  return NextResponse.json(ct)
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json(data)
 }
