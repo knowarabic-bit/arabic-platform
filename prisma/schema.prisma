@@ -1,0 +1,173 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  STUDENT
+  TEACHER
+  ADMIN
+}
+
+enum CourseStatus {
+  UPCOMING
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum CourseCategory {
+  ARABIC
+  QURAN
+}
+
+enum PaymentType {
+  SINGLE
+  SUBSCRIPTION
+}
+
+enum RefundStatus {
+  PENDING
+  APPROVED_CREDIT
+  APPROVED_CASH
+  REJECTED
+}
+
+enum LessonStatus {
+  SCHEDULED
+  LIVE
+  COMPLETED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(STUDENT)
+  avatar    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  enrollments    Enrollment[]
+  refunds        RefundRequest[]
+  courseTeachers CourseTeacher[]
+  payments       Payment[]
+}
+
+model Course {
+  id          String         @id @default(cuid())
+  title       String
+  description String?
+  category    CourseCategory
+  status      CourseStatus   @default(UPCOMING)
+  price       Decimal        @db.Decimal(10, 2)
+  startDate   DateTime
+  endDate     DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  lessons     Lesson[]
+  enrollments Enrollment[]
+  teachers    CourseTeacher[]
+}
+
+// Many-to-many: teachers <-> courses
+model CourseTeacher {
+  id         String   @id @default(cuid())
+  courseId   String
+  userId     String
+  role       String   @default("main") // main | substitute
+  assignedAt DateTime @default(now())
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([courseId, userId])
+}
+
+model Lesson {
+  id            String       @id @default(cuid())
+  courseId      String
+  title         String
+  lessonNumber  Int
+  scheduledAt   DateTime
+  duration      Int          // minutes
+  zoomMeetingId String?
+  zoomJoinUrl   String?
+  zoomStartUrl  String?
+  recordingUrl  String?
+  status        LessonStatus @default(SCHEDULED)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  course      Course       @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  attendances Attendance[]
+
+  @@unique([courseId, lessonNumber])
+}
+
+model Enrollment {
+  id          String      @id @default(cuid())
+  studentId   String
+  courseId    String
+  paymentType PaymentType
+  joinedAt    DateTime    @default(now())
+  isActive    Boolean     @default(true)
+
+  student     User            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  course      Course          @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  payments    Payment[]
+  refunds     RefundRequest[]
+  attendances Attendance[]
+
+  @@unique([studentId, courseId])
+}
+
+model Attendance {
+  id           String   @id @default(cuid())
+  enrollmentId String
+  lessonId     String
+  watchedAt    DateTime @default(now())
+  isLive       Boolean  @default(false) // true = joined live, false = watched recording
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  lesson     Lesson     @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([enrollmentId, lessonId])
+}
+
+model Payment {
+  id                    String      @id @default(cuid())
+  enrollmentId          String
+  userId                String
+  amount                Decimal     @db.Decimal(10, 2)
+  currency              String      @default("USD")
+  paymentType           PaymentType
+  stripePaymentIntentId String?     @unique
+  status                String      @default("pending") // pending | succeeded | failed | refunded
+  paidAt                DateTime?
+  createdAt             DateTime    @default(now())
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id])
+  user       User       @relation(fields: [userId], references: [id])
+}
+
+model RefundRequest {
+  id           String       @id @default(cuid())
+  enrollmentId String
+  studentId    String
+  refundType   String       // CREDIT | CASH
+  reason       String?
+  status       RefundStatus @default(PENDING)
+  reviewedAt   DateTime?
+  reviewedBy   String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id])
+  student    User       @relation(fields: [studentId], references: [id])
+}
